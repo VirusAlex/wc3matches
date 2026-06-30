@@ -1,0 +1,27 @@
+services:
+  wc3-tracker:
+    build: .
+    container_name: wc3-tracker
+    hostname: wc3-tracker
+    # host networking so the container can reach the SOCKS5 proxy on 127.0.0.1
+    # (Liquipedia is not directly reachable from the Docker bridge network).
+    network_mode: host
+    volumes:
+      - ./data:/app/data
+      - ./.liquipedia.token:/app/.liquipedia.token:ro
+    environment:
+      - TZ=Europe/Moscow
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - WC3_CHAT_ID=${WC3_CHAT_ID}
+      - LIQUIPEDIA_TOKEN_FILE=/app/.liquipedia.token
+      - LIQUIPEDIA_PROXY=${LIQUIPEDIA_PROXY:-socks5://127.0.0.1:18237}
+      - DB_PATH=/app/data/wc3.db
+      - TIER_MAX=${TIER_MAX:-2}
+      - UPDATE_INTERVAL_SECONDS=${UPDATE_INTERVAL_SECONDS:-180}
+      - POST_BEFORE_MINUTES=${POST_BEFORE_MINUTES:-30}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

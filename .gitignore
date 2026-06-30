@@ -1,0 +1,17 @@
+# secrets — never commit
+.liquipedia.token
+*.token
+.env
+.env.local
+
+# runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# build artifacts (root-level binaries only — not the cmd/ source dirs)
+/bin/
+/out/
+/tracker
+/probe
