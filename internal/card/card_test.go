@@ -115,6 +115,28 @@ func TestStartedFloatingDate(t *testing.T) {
 	}
 }
 
+func TestMatchTimeFloatingDate(t *testing.T) {
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	m := soloMatch()
+	m.Date = "2026-07-13 00:00:00"
+	m.DateExact = 0
+
+	// Upcoming, no evidence: the time is genuinely unknown.
+	if got := matchTimeUTC(m, now, time.Time{}); got != "Jul 13 (time TBD)" {
+		t.Errorf("upcoming floating = %q", got)
+	}
+	// Finished: "TBD" is nonsense, show just the date.
+	m.Finished = 1
+	if got := matchTimeUTC(m, now, time.Time{}); got != "Jul 13" {
+		t.Errorf("finished floating = %q", got)
+	}
+	// With a known first game, show its real start time.
+	first := time.Date(2026, 7, 13, 9, 4, 0, 0, time.UTC)
+	if got := matchTimeUTC(m, now, first); got != "Jul 13, 09:04 UTC" {
+		t.Errorf("floating with game start = %q", got)
+	}
+}
+
 func TestFormatUSD(t *testing.T) {
 	cases := map[float64]string{
 		3663.5:  "$3,664",

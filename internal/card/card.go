@@ -43,14 +43,22 @@ func RenderExtras(m liquipedia.Match, now time.Time, x *Extras) string {
 	if x != nil {
 		e, prize = x.W3C, x.PrizeUSD
 	}
-	writeTitle(&b, m, o1, o2)
-	writeStatus(&b, m, now, o1, o2, prize)
 	var stats []*w3c.PlayerStats
 	var games []*w3c.GameStats
 	curSeason := 0
 	if e != nil {
 		stats, games, curSeason = e.Stats, e.Games, e.Season
 	}
+	// Day-only matches have no scheduled time; the start of the first known
+	// game is the best available substitute.
+	var firstGame time.Time
+	for _, g := range games {
+		if !g.StartTime.IsZero() && (firstGame.IsZero() || g.StartTime.Before(firstGame)) {
+			firstGame = g.StartTime
+		}
+	}
+	writeTitle(&b, m, o1, o2)
+	writeStatus(&b, m, now, o1, o2, prize, firstGame)
 	writeLadder(&b, stats, curSeason, o1, o2)
 	writeGames(&b, m, now, o1, o2, games)
 
@@ -104,7 +112,7 @@ func scoreKnown(o1, o2 liquipedia.Opponent) bool {
 func notPlayed(m liquipedia.Match) bool { return m.ResultType == "np" }
 func walkover(m liquipedia.Match) bool  { return m.Walkover != "" || m.ResultType == "default" }
 
-func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 liquipedia.Opponent, prizeUSD float64) {
+func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 liquipedia.Opponent, prizeUSD float64, firstGame time.Time) {
 	var head string
 	switch {
 	case m.Finished == 1 && notPlayed(m):
@@ -135,7 +143,7 @@ func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 l
 	if g := gameLabel(m.Game); g != "" {
 		b.WriteString(" · " + g)
 	}
-	if st := matchTimeUTC(m); st != "?" {
+	if st := matchTimeUTC(m, now, firstGame); st != "?" {
 		fmt.Fprintf(b, "<br>🕐 %s", st)
 	}
 	if m.Tournament != "" {
@@ -466,12 +474,21 @@ func parseMatchTime(m liquipedia.Match) (time.Time, error) {
 	return time.Parse("2006-01-02 15:04:05", m.Date) // Liquipedia dates are UTC
 }
 
-func matchTimeUTC(m liquipedia.Match) string {
+func matchTimeUTC(m liquipedia.Match, now, firstGame time.Time) string {
 	t, err := parseMatchTime(m)
 	if err != nil {
 		return "?"
 	}
 	if m.DateExact == 0 {
+		// No scheduled time ever existed. Prefer the real start of the first
+		// known game; for a match already underway or done, "TBD" is nonsense,
+		// so fall back to just the date.
+		if !firstGame.IsZero() {
+			return firstGame.UTC().Format("Jan 2, 15:04") + " UTC"
+		}
+		if m.Finished == 1 || started(m, now) {
+			return t.UTC().Format("Jan 2")
+		}
 		return t.UTC().Format("Jan 2") + " (time TBD)"
 	}
 	return t.UTC().Format("Jan 2, 15:04") + " UTC"
