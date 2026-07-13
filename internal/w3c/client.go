@@ -68,6 +68,8 @@ type Client struct {
 	h2hGames   map[string][]*GameStats  // "tag1|tag2" -> games found so far
 	flo        []floGame                // recent FLO game window
 	floAt      time.Time                // when the FLO window was fetched
+	ongoing    []floGame                // W3C ongoing matchmaking games (fallback)
+	ongoingAt  time.Time
 	floSeen    map[string]map[string]*GameStats // pair -> flo game id -> game;
 	// accumulated across refreshes: the FLO window only spans ~1.5h, so games
 	// of a long series rotate out of it before the series ends.
@@ -288,9 +290,26 @@ func (c *Client) EnrichMatch(ctx context.Context, m liquipedia.Match) *Enrichmen
 			// not) and its host stays fast when W3C throttles us.
 			flo := c.floGamesFor(ctx, tags[0], tags[1], since)
 			e.Games = mergeGames(c.h2hSince(ctx, tags[0], tags[1], since), flo)
+			// Fallback live source: when the FLO window shows no running game
+			// for an unfinished match, the W3C ongoing list may still see a
+			// ladder-hosted game (redundancy for FLO outages).
+			if m.Finished != 1 && !anyLive(e.Games) {
+				if lg := c.ongoingLive(ctx, tags[0], tags[1]); lg != nil && !lg.StartTime.Before(since) {
+					e.Games = mergeGames(e.Games, []*GameStats{lg})
+				}
+			}
 		}
 	}
 	return e
+}
+
+func anyLive(games []*GameStats) bool {
+	for _, g := range games {
+		if g.Live {
+			return true
+		}
+	}
+	return false
 }
 
 // sweep drops long-unused cache entries; the daemon runs for months and the

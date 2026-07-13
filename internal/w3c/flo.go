@@ -30,11 +30,14 @@ const (
 const floGamesQuery = `{ games { id mapName startedAt endedAt players { name race } } }`
 
 type floGame struct {
-	ID        int
+	ID        int    // FLO numeric id (flo window entries)
+	StrID     string // W3C match id (ongoing-list entries)
 	Map       string
 	StartedAt time.Time
 	EndedAt   time.Time // zero = still running
-	Players   map[string]string // battletag -> race name
+	// battletag -> race. FLO entries carry the raw GraphQL enum ("HUMAN",
+	// converted in floGamesFor); ongoing-list entries are already readable.
+	Players map[string]string
 }
 
 // floGamesFor returns games where both tags play, oldest first, converted to
@@ -170,6 +173,85 @@ func (c *Client) fetchFloList(ctx context.Context) ([]floGame, error) {
 		out = append(out, fg)
 	}
 	return out, nil
+}
+
+// ongoingLive returns the currently running matchmaking game between two tags
+// from the W3C website API — a fallback live source for when the FLO window
+// is unavailable (ladder-hosted games appear in both, tournament lobbies only
+// in FLO).
+func (c *Client) ongoingLive(ctx context.Context, tag1, tag2 string) *GameStats {
+	list := c.ongoingList(ctx)
+	for _, g := range list {
+		r1, ok1 := g.Players[tag1]
+		r2, ok2 := g.Players[tag2]
+		if !ok1 || !ok2 {
+			continue
+		}
+		gs := &GameStats{
+			ID:        "w3c-live:" + g.StrID,
+			Map:       g.Map,
+			StartTime: g.StartedAt,
+			Live:      true,
+		}
+		gs.Players[0] = GamePlayerStats{BattleTag: tag1, Race: r1}
+		gs.Players[1] = GamePlayerStats{BattleTag: tag2, Race: r2}
+		return gs
+	}
+	return nil
+}
+
+// ongoingList returns the cached-or-fresh W3C ongoing-games list. Same
+// serve-stale-briefly semantics as floList.
+func (c *Client) ongoingList(ctx context.Context) []floGame {
+	c.mu.Lock()
+	list, at := c.ongoing, c.ongoingAt
+	c.mu.Unlock()
+	if time.Since(at) < floListTTL {
+		return list
+	}
+	var resp struct {
+		Matches []struct {
+			ID        string `json:"id"`
+			MapName   string `json:"mapName"`
+			StartTime string `json:"startTime"`
+			Teams     []struct {
+				Players []struct {
+					BattleTag string `json:"battleTag"`
+					Race      int    `json:"race"`
+				} `json:"players"`
+			} `json:"teams"`
+		} `json:"matches"`
+	}
+	if err := c.getJSON(ctx, "/api/matches/ongoing?offset=0&pageSize=200", &resp); err != nil {
+		log.Warn().Err(err).Msg("w3c: ongoing list fetch failed")
+		if time.Since(at) < floStickyFor {
+			return list
+		}
+		return nil
+	}
+	fresh := make([]floGame, 0, len(resp.Matches))
+	for _, m := range resp.Matches {
+		started, err := time.Parse(time.RFC3339, m.StartTime)
+		if err != nil {
+			continue
+		}
+		fg := floGame{
+			StrID:     m.ID,
+			Map:       stripMapVersion(m.MapName),
+			StartedAt: started,
+			Players:   map[string]string{},
+		}
+		for _, t := range m.Teams {
+			for _, p := range t.Players {
+				fg.Players[p.BattleTag] = raceName(p.Race)
+			}
+		}
+		fresh = append(fresh, fg)
+	}
+	c.mu.Lock()
+	c.ongoing, c.ongoingAt = fresh, time.Now()
+	c.mu.Unlock()
+	return fresh
 }
 
 // mergeGames appends FLO games that have no counterpart among the (richer)
