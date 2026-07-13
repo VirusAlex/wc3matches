@@ -75,6 +75,13 @@ type sendResult struct {
 	MessageID int64 `json:"message_id"`
 }
 
+// SendTextTo sends a plain-text message to an explicit chat (used for
+// operational alerts to an admin chat, never the main channel).
+func (b *Bot) SendTextTo(ctx context.Context, chatID, text string) error {
+	body := sendReq{ChatID: chatID, Text: text, DisableWebPagePreview: true}
+	return b.call(ctx, "sendMessage", body, nil)
+}
+
 // SendHTML sends an HTML-formatted message and returns the new message ID.
 func (b *Bot) SendHTML(ctx context.Context, text string) (int64, error) {
 	body := sendReq{
@@ -139,65 +146,70 @@ var ErrMessageNotEditable = errors.New("telegram: message not editable")
 func (b *Bot) call(ctx context.Context, method string, body any, out any) error {
 	const maxRetries = 5
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		err, retryAfter := b.callOnce(ctx, method, body, out)
+		retryAfter, transient, err := b.callOnce(ctx, method, body, out)
 		if err == nil {
 			return nil
 		}
-		if retryAfter > 0 {
-			delay := time.Duration(retryAfter+attempt*5) * time.Second
-			select {
-			case <-time.After(delay):
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		var delay time.Duration
+		switch {
+		case retryAfter > 0: // 429: honor the server-specified delay
+			delay = time.Duration(retryAfter+attempt*5) * time.Second
+		case transient && attempt < 2: // network hiccup: brief retry
+			delay = time.Duration(attempt+1) * 2 * time.Second
+		default:
+			return err
 		}
-		return err
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return fmt.Errorf("telegram %s: max retries exceeded", method)
 }
 
-func (b *Bot) callOnce(ctx context.Context, method string, body any, out any) (error, int) {
+// callOnce performs one API call. retryAfter > 0 means Telegram asked us to
+// back off (429); transient marks network-level failures worth retrying.
+func (b *Bot) callOnce(ctx context.Context, method string, body any, out any) (retryAfter int, transient bool, err error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
-		return err, 0
+		return 0, false, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+b.token+"/"+method, bytes.NewReader(buf))
 	if err != nil {
-		return err, 0
+		return 0, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := b.httpc.Do(req)
 	if err != nil {
-		return err, 0
+		return 0, ctx.Err() == nil, err // transient unless our context expired
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
 	var tg tgResp
 	if err := json.Unmarshal(respBody, &tg); err != nil {
-		return fmt.Errorf("decode: %w (raw: %s)", err, string(respBody)), 0
+		return 0, false, fmt.Errorf("decode: %w (raw: %s)", err, string(respBody))
 	}
 	if tg.OK {
 		if out != nil && tg.Result != nil {
 			rr, _ := json.Marshal(tg.Result)
 			if err := json.Unmarshal(rr, out); err != nil {
-				return fmt.Errorf("result decode: %w", err), 0
+				return 0, false, fmt.Errorf("result decode: %w", err)
 			}
 		}
-		return nil, 0
+		return 0, false, nil
 	}
-	// 429: retry after the server-specified delay
 	if resp.StatusCode == http.StatusTooManyRequests && tg.Parameters != nil {
-		return fmt.Errorf("rate limited (%ds)", tg.Parameters.RetryAfter), tg.Parameters.RetryAfter
+		return tg.Parameters.RetryAfter, false, fmt.Errorf("rate limited (%ds)", tg.Parameters.RetryAfter)
 	}
 	if strings.Contains(tg.Description, "message is not modified") {
-		return ErrNotModified, 0
+		return 0, false, ErrNotModified
 	}
 	if strings.Contains(tg.Description, "message to edit not found") ||
 		strings.Contains(tg.Description, "message can't be edited") {
-		return ErrMessageNotEditable, 0
+		return 0, false, ErrMessageNotEditable
 	}
-	return fmt.Errorf("telegram: %s", tg.Description), 0
+	return 0, false, fmt.Errorf("telegram: %s", tg.Description)
 }

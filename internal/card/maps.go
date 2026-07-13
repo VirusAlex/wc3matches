@@ -21,6 +21,10 @@ const liqImg = "https://liquipedia.net/commons/images/thumb/"
 var mapImages = map[string]string{
 	"autumn leaves":       liqImg + "e/e8/Wc3AutumnLeaves.png/140px-Wc3AutumnLeaves.png",
 	"concealed hill":      liqImg + "8/8f/Concealed_Hill_1.2.png/114px-Concealed_Hill_1.2.png",
+	"echo isles":          liqImg + "7/7d/Echo_Isles.png/166px-Echo_Isles.png",
+	"fading autumn":       "https://liquipedia.net/commons/images/9/98/Wc3FadingAutumn.png",
+	"scrimmage":           liqImg + "c/c5/Wc3Scrimmage.png/169px-Wc3Scrimmage.png",
+	"shallow grave":       liqImg + "4/49/Wc3ShallowGrave.png/120px-Wc3ShallowGrave.png",
 	"gnoll wood":          liqImg + "e/eb/Wc3GnollWood.png/140px-Wc3GnollWood.png",
 	"hammerfall":          liqImg + "2/21/Hammerfall.png/139px-Hammerfall.png",
 	"last refuge":         liqImg + "9/9a/Last_Refuge.png/140px-Last_Refuge.png",

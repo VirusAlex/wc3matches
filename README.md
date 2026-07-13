@@ -35,6 +35,18 @@ We honour the API terms of use:
   race), Bo, tier, game (Reforged/TFT), start time (UTC), tournament.
 - Series score + 🏆 winner in the title, updated live.
 - Per-map collapsible sections: map thumbnail + a Player / Race / Heroes table.
+- [W3Champions](https://w3champions.com) enrichment (optional, best-effort):
+  ladder MMR + league rank for both players, and per-map duration, final hero
+  levels and unit counts when the game itself went through W3C matchmaking.
+  Players are matched via the aka data W3C publishes in its league rankings.
+- [FLO](https://w3flo.com) enrichment: tournament games hosted in FLO lobbies
+  (invisible to the matchmaking API) get live "in progress" markers, per-game
+  races and map durations while they are in FLO's recent-games window.
+- Bracket stage in the card ("Grand Final", "Lower Bracket Round 2", ...) and
+  the tournament prize pool in USD (from the LiquipediaDB tournament table).
+- Operational hardening: heartbeat-based Docker healthcheck, optional alerts
+  to an admin chat (`ADMIN_CHAT_ID`), daily digest with retry and catch-up
+  after downtime, persisted API caches to respect the providers' rate limits.
 - Watch (stream) / VOD / Head-to-Head links when available.
 - Daily digest grouped by tournament.
 - Favourites + tier filter (configurable).
@@ -50,6 +62,7 @@ Copy `.env.example` to `.env` and fill it in. Key variables:
 | `LIQUIPEDIA_API_KEY` / `LIQUIPEDIA_TOKEN_FILE` | LiquipediaDB API key (or file path) |
 | `LIQUIPEDIA_PROXY` | `socks5://host:port` (Liquipedia is reached via proxy) |
 | `TIER_MAX` | tiers `1..N` count as "top" (1=S, 2=A) |
+| `W3C_ENRICH` | `1`/`0` — W3Champions enrichment (default on) |
 
 Favourite players are seeded into the `favorites` table on first run and can be
 edited via SQL afterwards.

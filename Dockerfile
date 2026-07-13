@@ -10,4 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=builder /out/tracker /usr/local/bin/tracker
 RUN mkdir -p /app/data
 WORKDIR /app
+# The daemon touches /app/data/heartbeat after every completed tick (180s);
+# consider the container unhealthy when it goes quiet for 10+ minutes.
+HEALTHCHECK --interval=60s --timeout=5s --start-period=5m \
+  CMD sh -c '[ -n "$(find /app/data/heartbeat -mmin -10 2>/dev/null)" ]'
 ENTRYPOINT ["/usr/local/bin/tracker"]

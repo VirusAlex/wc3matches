@@ -86,11 +86,35 @@ func (c *Client) Matches(ctx context.Context, conditions, order string, limit in
 		"match2id", "pagename", "date", "dateexact", "finished", "winner",
 		"walkover", "resulttype", "bestof", "tournament", "parent", "series",
 		"game", "patch", "liquipediatier", "liquipediatiertype", "vod", "stream",
-		"links", "match2opponents", "match2games",
+		"links", "match2bracketdata", "match2opponents", "match2games",
 	}, ","))
 
 	var out MatchResponse
 	if err := c.get(ctx, "/match", q, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Error) > 0 {
+		return nil, fmt.Errorf("liquipedia api: %s", strings.Join(out.Error, "; "))
+	}
+	return out.Result, nil
+}
+
+// Tournaments queries the tournament datapoint (prize pool is normalized to
+// USD by Liquipedia). conditions e.g. `[[pagename::X]] OR [[pagename::Y]]`.
+func (c *Client) Tournaments(ctx context.Context, conditions string, limit int) ([]Tournament, error) {
+	q := url.Values{}
+	q.Set("wiki", c.cfg.Wiki)
+	q.Set("limit", fmt.Sprintf("%d", limit))
+	if conditions != "" {
+		q.Set("conditions", conditions)
+	}
+	q.Set("query", strings.Join([]string{
+		"pagename", "name", "prizepool", "participantsnumber",
+		"startdate", "enddate", "liquipediatier",
+	}, ","))
+
+	var out TournamentResponse
+	if err := c.get(ctx, "/tournament", q, &out); err != nil {
 		return nil, err
 	}
 	if len(out.Error) > 0 {
@@ -119,7 +143,9 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("liquipedia http %d: %s", resp.StatusCode, snippet(body))
+		// Error bodies echo the API key back; never let it reach the logs.
+		return fmt.Errorf("liquipedia http %d: %s", resp.StatusCode,
+			strings.ReplaceAll(snippet(body), c.cfg.APIKey, "<apikey>"))
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("decode: %w (raw: %s)", err, snippet(body))

@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS matches (
 );
 CREATE TABLE IF NOT EXISTS favorites (
 	name TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS kv (
+	k TEXT PRIMARY KEY,
+	v TEXT NOT NULL
 );`
 	if _, err := d.conn.ExecContext(ctx, schema); err != nil {
 		return err
@@ -158,4 +162,33 @@ func (d *DB) DeleteOldFinished(ctx context.Context, age time.Duration) (int64, e
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// DeleteStaleUnfinished drops unfinished matches that stopped updating long
+// ago: cancelled or rescheduled matches that left the query window would
+// otherwise sit in the active set forever.
+func (d *DB) DeleteStaleUnfinished(ctx context.Context, age time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-age).UTC().Format("2006-01-02 15:04:05")
+	res, err := d.conn.ExecContext(ctx, `DELETE FROM matches WHERE finished=0 AND updated_at < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// GetKV returns the value for a key, or "" when absent.
+func (d *DB) GetKV(ctx context.Context, k string) (string, error) {
+	var v string
+	err := d.conn.QueryRowContext(ctx, `SELECT v FROM kv WHERE k=?`, k).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetKV stores a key/value pair.
+func (d *DB) SetKV(ctx context.Context, k, v string) error {
+	_, err := d.conn.ExecContext(ctx,
+		`INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, v)
+	return err
 }
