@@ -25,6 +25,12 @@ const (
 	// floStickyFor: on refresh failure, how long a previously fetched list is
 	// still trusted (the window is live data, stale is quickly useless).
 	floStickyFor = 10 * time.Minute
+	// floRetryEvery throttles refetch attempts after a failure: many callers
+	// per tick must not each pay for a hanging endpoint.
+	floRetryEvery = 45 * time.Second
+	// floFetchBudget caps one list fetch so a dead source cannot starve the
+	// tick that triggered it.
+	floFetchBudget = 30 * time.Second
 )
 
 const floGamesQuery = `{ games { id mapName startedAt endedAt players { name race } } }`
@@ -102,21 +108,33 @@ func (c *Client) floGamesFor(ctx context.Context, tag1, tag2 string, since time.
 }
 
 // floList returns the cached-or-fresh FLO game window. Never errors: on
-// failure the previous list is served while it is recent enough.
+// failure the previous list is served while it is recent enough, and refetch
+// attempts are throttled + time-boxed so a dead source stays cheap.
 func (c *Client) floList(ctx context.Context) []floGame {
 	c.mu.Lock()
-	list, at := c.flo, c.floAt
+	list, at, tryAt := c.flo, c.floAt, c.floTryAt
 	c.mu.Unlock()
 	if time.Since(at) < floListTTL {
 		return list
 	}
-	fresh, err := c.fetchFloList(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("w3c: flo game list fetch failed")
+	stale := func() []floGame {
 		if time.Since(at) < floStickyFor {
 			return list
 		}
 		return nil
+	}
+	if time.Since(tryAt) < floRetryEvery {
+		return stale()
+	}
+	c.mu.Lock()
+	c.floTryAt = time.Now()
+	c.mu.Unlock()
+	fctx, cancel := context.WithTimeout(ctx, floFetchBudget)
+	defer cancel()
+	fresh, err := c.fetchFloList(fctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("w3c: flo game list fetch failed")
+		return stale()
 	}
 	c.mu.Lock()
 	c.flo, c.floAt = fresh, time.Now()
@@ -201,14 +219,28 @@ func (c *Client) ongoingLive(ctx context.Context, tag1, tag2 string) *GameStats 
 }
 
 // ongoingList returns the cached-or-fresh W3C ongoing-games list. Same
-// serve-stale-briefly semantics as floList.
+// serve-stale / throttled-retry / time-boxed semantics as floList.
 func (c *Client) ongoingList(ctx context.Context) []floGame {
 	c.mu.Lock()
-	list, at := c.ongoing, c.ongoingAt
+	list, at, tryAt := c.ongoing, c.ongoingAt, c.ongoingTryAt
 	c.mu.Unlock()
 	if time.Since(at) < floListTTL {
 		return list
 	}
+	stale := func() []floGame {
+		if time.Since(at) < floStickyFor {
+			return list
+		}
+		return nil
+	}
+	if time.Since(tryAt) < floRetryEvery {
+		return stale()
+	}
+	c.mu.Lock()
+	c.ongoingTryAt = time.Now()
+	c.mu.Unlock()
+	fctx, cancel := context.WithTimeout(ctx, floFetchBudget)
+	defer cancel()
 	var resp struct {
 		Matches []struct {
 			ID        string `json:"id"`
@@ -222,12 +254,9 @@ func (c *Client) ongoingList(ctx context.Context) []floGame {
 			} `json:"teams"`
 		} `json:"matches"`
 	}
-	if err := c.getJSON(ctx, "/api/matches/ongoing?offset=0&pageSize=200", &resp); err != nil {
+	if err := c.getJSON(fctx, "/api/matches/ongoing?offset=0&pageSize=200", &resp); err != nil {
 		log.Warn().Err(err).Msg("w3c: ongoing list fetch failed")
-		if time.Since(at) < floStickyFor {
-			return list
-		}
-		return nil
+		return stale()
 	}
 	fresh := make([]floGame, 0, len(resp.Matches))
 	for _, m := range resp.Matches {

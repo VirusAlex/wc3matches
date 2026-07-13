@@ -50,15 +50,20 @@ func RenderExtras(m liquipedia.Match, now time.Time, x *Extras) string {
 		stats, games, curSeason = e.Stats, e.Games, e.Season
 	}
 	// Day-only matches have no scheduled time; the start of the first known
-	// game is the best available substitute.
+	// game is the best available substitute. A running game is also liveness
+	// evidence in its own right (the card may post before Liquipedia wakes up).
 	var firstGame time.Time
+	liveGame := false
 	for _, g := range games {
 		if !g.StartTime.IsZero() && (firstGame.IsZero() || g.StartTime.Before(firstGame)) {
 			firstGame = g.StartTime
 		}
+		if g.Live {
+			liveGame = true
+		}
 	}
 	writeTitle(&b, m, o1, o2)
-	writeStatus(&b, m, now, o1, o2, prize, firstGame)
+	writeStatus(&b, m, now, o1, o2, prize, firstGame, liveGame)
 	writeLadder(&b, stats, curSeason, o1, o2)
 	writeGames(&b, m, now, o1, o2, games)
 
@@ -112,7 +117,7 @@ func scoreKnown(o1, o2 liquipedia.Opponent) bool {
 func notPlayed(m liquipedia.Match) bool { return m.ResultType == "np" }
 func walkover(m liquipedia.Match) bool  { return m.Walkover != "" || m.ResultType == "default" }
 
-func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 liquipedia.Opponent, prizeUSD float64, firstGame time.Time) {
+func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 liquipedia.Opponent, prizeUSD float64, firstGame time.Time, liveGame bool) {
 	var head string
 	switch {
 	case m.Finished == 1 && notPlayed(m):
@@ -121,7 +126,7 @@ func writeStatus(b *strings.Builder, m liquipedia.Match, now time.Time, o1, o2 l
 		head = "✅ <b>Finished</b> (walkover)"
 	case m.Finished == 1:
 		head = "✅ <b>Finished</b>"
-	case started(m, now):
+	case started(m, now) || liveGame:
 		head = "🔴 <b>LIVE</b>"
 	default:
 		head = "⏰ <b>Upcoming</b>"

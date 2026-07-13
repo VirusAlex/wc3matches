@@ -68,8 +68,10 @@ type Client struct {
 	h2hGames   map[string][]*GameStats  // "tag1|tag2" -> games found so far
 	flo        []floGame                // recent FLO game window
 	floAt      time.Time                // when the FLO window was fetched
+	floTryAt   time.Time                // last fetch attempt (failure backoff)
 	ongoing    []floGame                // W3C ongoing matchmaking games (fallback)
 	ongoingAt  time.Time
+	ongoingTryAt time.Time
 	floSeen    map[string]map[string]*GameStats // pair -> flo game id -> game;
 	// accumulated across refreshes: the FLO window only spans ~1.5h, so games
 	// of a long series rotate out of it before the series ends.
@@ -312,6 +314,28 @@ func anyLive(games []*GameStats) bool {
 	return false
 }
 
+// HasLiveGame reports whether a game between the two matched opponents is
+// running right now on FLO or W3C matchmaking. Used as a posting trigger for
+// matches whose Liquipedia schedule alone says nothing yet (day-only dates).
+func (c *Client) HasLiveGame(ctx context.Context, m liquipedia.Match) bool {
+	if len(m.Opponents) < 2 || !m.Opponents[0].Solo() || !m.Opponents[1].Solo() {
+		return false
+	}
+	tag1 := c.tagFor(ctx, m.Opponents[0].Players[0].Name, m.Opponents[0].Display())
+	tag2 := c.tagFor(ctx, m.Opponents[1].Players[0].Name, m.Opponents[1].Display())
+	if tag1 == "" || tag2 == "" {
+		return false
+	}
+	since := time.Now().Add(-6 * time.Hour)
+	if start, err := time.Parse("2006-01-02 15:04:05", m.Date); err == nil {
+		since = start.Add(-gameSlack)
+	}
+	if anyLive(c.floGamesFor(ctx, tag1, tag2, since)) {
+		return true
+	}
+	return c.ongoingLive(ctx, tag1, tag2) != nil
+}
+
 // sweep drops long-unused cache entries; the daemon runs for months and the
 // per-pair / per-game caches would otherwise grow without bound. At most once
 // an hour.
@@ -474,10 +498,13 @@ func (c *Client) h2hSince(ctx context.Context, tag1, tag2 string, since time.Tim
 		return cached
 	}
 
-	ids := c.h2hMatchIDs(ctx, tag1, tag2, since)
+	// Time-boxed: with a hanging API the search must not starve the tick.
+	hctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	ids := c.h2hMatchIDs(hctx, tag1, tag2, since)
 	var games []*GameStats
 	for _, id := range ids {
-		if g := c.gameDetail(ctx, id, tag1, tag2); g != nil {
+		if g := c.gameDetail(hctx, id, tag1, tag2); g != nil {
 			games = append(games, g)
 		}
 	}

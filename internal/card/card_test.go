@@ -79,6 +79,26 @@ func TestRenderFinishedWithExtras(t *testing.T) {
 	}
 }
 
+func TestRenderLiveFromFloOnly(t *testing.T) {
+	// Liquipedia knows nothing yet (scores -1, floating date), but FLO sees a
+	// running game: the card must say LIVE, not Upcoming.
+	now := time.Date(2026, 7, 13, 15, 30, 0, 0, time.UTC)
+	m := soloMatch()
+	m.Date = "2026-07-13 00:00:00"
+	m.DateExact = 0
+	x := &Extras{W3C: &w3c.Enrichment{
+		Games: []*w3c.GameStats{{ID: "flo:9", Map: "Hammerfall", Live: true,
+			StartTime: now.Add(-5 * time.Minute)}},
+	}}
+	html := RenderExtras(m, now, x)
+	if !strings.Contains(html, "LIVE") || strings.Contains(html, "Upcoming") {
+		t.Errorf("FLO-only live game must render as LIVE\n%s", html)
+	}
+	if strings.Contains(html, "TBD") {
+		t.Error("live match must not say time TBD")
+	}
+}
+
 func TestRenderLiveFloGame(t *testing.T) {
 	now := time.Date(2026, 7, 13, 15, 30, 0, 0, time.UTC)
 	m := soloMatch()

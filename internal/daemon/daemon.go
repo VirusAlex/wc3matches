@@ -301,7 +301,7 @@ func (d *Daemon) tick(ctx context.Context) {
 		if existing != nil && existing.TelegramMessageID != nil {
 			continue // already posted; edit phase handles it
 		}
-		if !shouldPost(m, time.Now(), d.cfg.PostBeforeMinutes) {
+		if !shouldPost(m, time.Now(), d.cfg.PostBeforeMinutes) && !d.liveDetected(tickCtx, m) {
 			continue
 		}
 		if err := d.postCard(tickCtx, m); err != nil {
@@ -433,6 +433,25 @@ func interesting(m liquipedia.Match, favorites map[string]struct{}, tierMax int)
 		}
 	}
 	return false
+}
+
+// liveDetected is the second posting trigger: the schedule says nothing yet
+// (typically a day-only date), but a live source (FLO / W3C matchmaking) sees
+// a running game between the two players. Gated to matches around their
+// scheduled day so far-future brackets don't cost live-list lookups.
+func (d *Daemon) liveDetected(ctx context.Context, m liquipedia.Match) bool {
+	if d.wc == nil || m.Finished == 1 {
+		return false
+	}
+	t, err := time.Parse("2006-01-02 15:04:05", m.Date)
+	if err != nil {
+		return false
+	}
+	now := time.Now().UTC()
+	if t.After(now.Add(12*time.Hour)) || t.Before(now.Add(-24*time.Hour)) {
+		return false
+	}
+	return d.wc.HasLiveGame(ctx, m)
 }
 
 // shouldPost: live (started, unfinished) or about to start within the window.
